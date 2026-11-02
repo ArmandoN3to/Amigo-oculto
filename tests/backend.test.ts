@@ -187,7 +187,7 @@ describe("persistência do sorteio e envio", () => {
     });
     const firstSummary = await dispatchEmails(eventId);
     expect(firstSummary.sent).toBe(2); expect(firstSummary.failed).toBe(1);
-    expect(requests.every(request => String(request.body.text).includes("Você tirou:"))).toBe(true);
+    expect(requests.every(request => !String(request.body.text).includes("Você tirou:"))).toBe(true);
     const failedRequest = requests[0];
     const retry = await dispatchEmails(eventId);
     expect(retry.sent).toBe(1);
@@ -238,7 +238,7 @@ describe("fluxo completo pelas ações do aplicativo", () => {
       // credentials, external e-mails, or the application's local DB are used.
       const idempotencyKey = mail.messageId;
       requests.push({ mail, idempotencyKey });
-      if (mail.text.includes("Você tirou:") && mail.to[0] === "familiar0@example.test" && failOneResult) {
+      if (mail.subject.endsWith(": seu amigo oculto foi sorteado") && mail.to[0] === "familiar0@example.test" && failOneResult) {
         failOneResult = false;
         failedResultKey = idempotencyKey;
         throw Object.assign(new Error("temporary test failure"), { responseCode: 421 });
@@ -285,7 +285,7 @@ describe("fluxo completo pelas ações do aplicativo", () => {
     expect(dashboardAfterDraw.selectedEvent!.drawVersion).toBe(1);
     expect(dashboardAfterDraw.selectedEvent!.participants.filter(person => person.emailStatus === "sent")).toHaveLength(2);
     expect(dashboardAfterDraw.selectedEvent!.participants.filter(person => person.emailStatus === "failed")).toHaveLength(1);
-    const resultRequests = requests.filter(request => request.mail.text.includes("Você tirou:"));
+    const resultRequests = requests.filter(request => request.mail.subject.endsWith(": seu amigo oculto foi sorteado"));
     expect(resultRequests).toHaveLength(3);
     const db = await getDb();
     const savedPairs = (await db.query("SELECT giver_id,receiver_id FROM draws WHERE event_id=$1 ORDER BY giver_id", [eventId])).rows;
@@ -300,7 +300,8 @@ describe("fluxo completo pelas ações do aplicativo", () => {
       expect(page?.self.name).toBe(`Familiar ${index}`);
       expect(page?.recipient?.name).not.toBe(page?.self.name);
       expect(page?.recipient?.wishlistText).toBe(`Sugestões do ${page?.recipient?.name}`);
-      expect(result.mail.text).toContain(`Você tirou: ${page!.recipient!.name}.`);
+      expect(result.mail.text).not.toContain(page!.recipient!.name);
+      expect(result.mail.html).not.toContain(page!.recipient!.name);
       expect(Object.keys(page!.recipient!).sort()).toEqual(["emoji", "name", "wishlistText"]);
       expect(JSON.stringify(page)).not.toContain("@example.test");
     }

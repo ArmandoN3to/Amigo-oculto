@@ -813,8 +813,8 @@ function EmailPanel({
           </p>
         ) : (
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Cada pessoa recebe somente o próprio link. Após o sorteio, o e-mail
-            também mostra o nome sorteado.
+            Cada pessoa recebe somente o próprio link para consultar o resultado
+            e atualizar sua lista.
           </p>
         )}
       </CardContent>
