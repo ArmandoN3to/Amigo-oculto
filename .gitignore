@@ -1,0 +1,57 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+/test-results/
+/playwright-report/
+/blob-report/
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+/dist/
+
+# misc
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.pem
+*.key
+*.p12
+*.pfx
+
+# debug
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local secrets (keep the configuration template versioned)
+.env*
+!.env.example
+
+# local database (contains participant data and draw results)
+/.data/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
