@@ -1,5 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { PGlite } from "@electric-sql/pglite";
+import sharp from "sharp";
 
 const smtpSend = vi.hoisted(() => vi.fn());
 vi.mock("nodemailer", () => ({ default: { createTransport: vi.fn(() => ({ sendMail: smtpSend, close: vi.fn() })) } }));
@@ -14,11 +17,13 @@ vi.mock("next/navigation", () => ({ redirect: (url: string) => { throw new Error
 
 import { getDb, closeDb } from "../src/lib/db";
 import { hashPassword } from "../src/lib/crypto";
-import { participantToken, resolveParticipant } from "../src/lib/tokens";
+import { newParticipantToken, participantToken, resolveParticipant } from "../src/lib/tokens";
+import { INITIAL_SCHEMA } from "../src/lib/schema";
 import { dispatchEmails } from "../src/lib/email";
 import { getAdminSession } from "../src/lib/auth";
 import { confirmDraw, saveEvent, saveParticipant, saveExclusion } from "../src/server/service";
 import { getAdminDashboard, getParticipantPage } from "../src/server/queries";
+import { GET as getWishlistPhoto } from "../src/app/participante/[token]/fotos/[photoId]/route";
 import { loginAction, saveEventAction, saveParticipantAction, saveWishlistAction, deleteParticipantAction, saveExclusionAction, drawAction, sendInvitesAction, retryEmailsAction, regenerateParticipantLinkAction, saveParticipantEmojiAction } from "../src/server/actions";
 
 process.env.AUTH_SECRET = "test-secret-only-for-isolated-in-memory-tests-123456";
@@ -131,6 +136,94 @@ describe("sugestões individuais curtas", () => {
     expect((await saveWishlistAction({ token, wishlistText: "Livro de aventura" })).ok).toBe(true);
     expect((await getParticipantPage(token))?.self.wishlistText).toBe("Livro de aventura");
     expect((await saveWishlistAction({ token, wishlistText: legacy })).ok).toBe(false);
+  });
+});
+
+describe("fotos das sugestões", () => {
+  it("aplica a migração a um evento já sorteado e preserva sugestões, links e pares", async () => {
+    const legacy = await PGlite.create();
+    try {
+      await legacy.exec(await readFile(new URL("../migrations/001-initial.sql", import.meta.url), "utf8"));
+      await legacy.exec(await readFile(new URL("../migrations/002-participant-emoji.sql", import.meta.url), "utf8"));
+      const eventId = randomUUID();
+      await legacy.query("INSERT INTO events (id,name,event_date,status,draw_version) VALUES ($1,'Natal','2026-12-25','drawn',2)", [eventId]);
+      const ids = [randomUUID(), randomUUID()];
+      for (const id of ids) {
+        const { nonce, hash } = newParticipantToken(id);
+        await legacy.query(`INSERT INTO participants (id,event_id,name,email,token_nonce,access_token_hash,wishlist_text)
+          VALUES ($1,$2,'Familiar',$3,$4,$5,'Livro antigo')`, [id, eventId, `${id}@example.test`, nonce, hash]);
+      }
+      await legacy.query("INSERT INTO draws (event_id,giver_id,receiver_id,draw_version) VALUES ($1,$2,$3,2),($1,$3,$2,2)", [eventId, ...ids]);
+      const people = "SELECT id,wishlist_text,token_nonce,access_token_hash FROM participants ORDER BY id";
+      const pairs = "SELECT * FROM draws ORDER BY giver_id";
+      const beforePeople = (await legacy.query(people)).rows;
+      const beforePairs = (await legacy.query(pairs)).rows;
+
+      await legacy.exec(INITIAL_SCHEMA);
+      await legacy.exec(INITIAL_SCHEMA);
+
+      expect((await legacy.query(people)).rows).toEqual(beforePeople);
+      expect((await legacy.query(pairs)).rows).toEqual(beforePairs);
+      expect((await legacy.query("SELECT status,draw_version FROM events")).rows).toEqual([{ status: "drawn", draw_version: 2 }]);
+      expect((await legacy.query("SELECT id FROM wishlist_photos")).rows).toEqual([]);
+    } finally {
+      await legacy.close();
+    }
+  });
+
+  it("anexa à sugestão correta, protege a foto e mantém o sorteio ao atualizar a lista", async () => {
+    const { eventId, people } = await family();
+    const db = await getDb();
+    const owner = people[0];
+    const token = participantToken(owner.id, owner.token_nonce);
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "blue" } }).png().toBuffer();
+    const upload = new FormData();
+    upload.set("photo", new File([new Uint8Array(png)], "presente.png", { type: "image/png" }));
+    const view = (viewerToken: string, photoId: string) =>
+      getWishlistPhoto(new Request("http://localhost"), { params: Promise.resolve({ token: viewerToken, photoId }) });
+
+    const text = "Livro\nLivro";
+    expect((await saveWishlistAction({ token, wishlistText: "Livro" })).ok).toBe(true);
+    expect((await saveWishlistAction({ token, wishlistText: text }, upload)).ok).toBe(true);
+    const self = (await getParticipantPage(token))!.self;
+    const photoId = self.photoIds[1];
+    expect(photoId).toBeTruthy();
+    const photo = await view(token, photoId);
+    expect(photo.status).toBe(200);
+    expect(photo.headers.get("Content-Type")).toBe("image/webp");
+    expect(photo.headers.get("Cache-Control")).toBe("private, no-store");
+    expect((await sharp(Buffer.from(await photo.arrayBuffer())).metadata()).format).toBe("webp");
+    for (const other of people.slice(1)) {
+      expect((await view(participantToken(other.id, other.token_nonce), photoId)).status).toBe(404);
+    }
+
+    await confirmDraw(eventId);
+    const readPairs = async () => (await db.query<{ giver_id: string; receiver_id: string }>(
+      "SELECT giver_id,receiver_id,draw_version FROM draws WHERE event_id=$1 ORDER BY giver_id", [eventId],
+    )).rows;
+    const pairs = await readPairs();
+    const giverId = pairs.find(pair => pair.receiver_id === owner.id)?.giver_id;
+    const giver = people.find(person => person.id === giverId)!;
+    const giverToken = participantToken(giver.id, giver.token_nonce);
+    const other = people.find(person => person.id !== giver.id && person.id !== owner.id)!;
+    expect((await getParticipantPage(giverToken))?.recipient?.photoIds).toEqual({ 1: photoId });
+    expect((await view(giverToken, photoId)).status).toBe(200);
+    expect((await view(participantToken(other.id, other.token_nonce), photoId)).status).toBe(404);
+
+    const invalid = new FormData();
+    invalid.set("photo", new File(["arquivo inválido"], "falso.png", { type: "image/png" }));
+    expect((await saveWishlistAction({ token, wishlistText: text, photoIndex: 0 }, invalid)).ok).toBe(false);
+    expect((await getParticipantPage(token))?.self).toEqual(self);
+    expect((await saveWishlistAction({ token, wishlistText: text, photoIndex: 0, expectedRevision: self.wishlistRevision }, upload)).ok).toBe(true);
+    const updated = (await getParticipantPage(token))!.self;
+    expect((await saveWishlistAction({ token, wishlistText: "Livro", removedIndex: 0, expectedRevision: self.wishlistRevision })).ok).toBe(false);
+    expect((await saveWishlistAction({ token, wishlistText: "Livro", removedIndex: 0, expectedRevision: updated.wishlistRevision })).ok).toBe(true);
+    expect((await getParticipantPage(giverToken))?.recipient?.photoIds).toEqual({ 0: photoId });
+    expect((await view(giverToken, updated.photoIds[0])).status).toBe(404);
+    expect(await readPairs()).toEqual(pairs);
+
+    await db.query("UPDATE participants SET access_token_hash=$2 WHERE id=$1", [giver.id, randomUUID()]);
+    expect((await view(giverToken, photoId)).status).toBe(404);
   });
 });
 

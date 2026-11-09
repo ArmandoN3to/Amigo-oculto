@@ -1,3 +1,5 @@
+import type { WishlistPhotoIds } from "./wishlist";
+
 export type EventStatus = "draft" | "drawn";
 export type EmailStatus = "pending" | "sent" | "failed";
 
@@ -36,8 +38,8 @@ export interface AdminDashboard extends RuntimeStatus {
 }
 export interface ParticipantPage {
   event: PublicEvent;
-  self: { name: string; wishlistText: string };
-  recipient: { name: string; emoji: string; wishlistText: string } | null;
+  self: { name: string; wishlistText: string; wishlistRevision: number; photoIds: WishlistPhotoIds };
+  recipient: { name: string; emoji: string; wishlistText: string; photoIds?: WishlistPhotoIds } | null;
 }
 export interface ActionResult {
   ok: boolean;

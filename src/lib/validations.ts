@@ -21,4 +21,11 @@ export const deleteParticipantSchema = z.object({ eventId: idSchema, participant
 export const exclusionSchema = z.object({ eventId: idSchema, giverId: idSchema, receiverId: idSchema, remove: z.boolean().optional() });
 export const drawSchema = z.object({ eventId: idSchema, redraw: z.boolean().optional(), expectedDrawVersion: z.number().int().min(0).optional() });
 export const eventIdSchema = z.object({ eventId: idSchema });
-export const wishlistSchema = z.object({ token: z.string().max(160), wishlistText: z.string().max(WISHLIST_MAX_LENGTH, "Use até 5.000 caracteres na lista."), expectedWishlistText: z.string().max(WISHLIST_MAX_LENGTH).optional() });
+export const wishlistSchema = z.object({
+  token: z.string().max(160),
+  wishlistText: z.string().max(WISHLIST_MAX_LENGTH, "Use até 5.000 caracteres na lista."),
+  expectedWishlistText: z.string().max(WISHLIST_MAX_LENGTH).optional(),
+  expectedRevision: z.number().int().nonnegative().optional(),
+  removedIndex: z.number().int().nonnegative().optional(),
+  photoIndex: z.number().int().nonnegative().optional(),
+});

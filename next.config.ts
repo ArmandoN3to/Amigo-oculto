@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   // Individual links and Server Action arguments are private capabilities.
   logging: false,
   serverExternalPackages: ["@electric-sql/pglite", "pg"],
+  experimental: {
+    serverActions: { bodySizeLimit: "4mb" },
+  },
   async headers() {
     return [{
       source: "/:path*",

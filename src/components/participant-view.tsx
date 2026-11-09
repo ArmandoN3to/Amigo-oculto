@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { ImagePlus, X } from "lucide-react";
 import type { ParticipantPage } from "@/lib/types";
 import { saveWishlistAction } from "@/server/actions";
 import { GiftMark } from "@/components/family-shell";
@@ -9,7 +9,11 @@ import { Button } from "@/components/ui/button";
 import { RecipientReveal } from "@/components/recipient-reveal";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { wishlistItems, WISHLIST_ITEM_MAX_LENGTH, WISHLIST_MAX_LENGTH } from "@/lib/wishlist";
+import { WishlistPhotoLink } from "@/components/wishlist-photo-link";
+import {
+  wishlistItems, WISHLIST_ITEM_MAX_LENGTH, WISHLIST_MAX_LENGTH, WISHLIST_MAX_PHOTOS,
+  WISHLIST_PHOTO_MAX_BYTES, WISHLIST_PHOTO_TOO_LARGE,
+} from "@/lib/wishlist";
 import {
   Card,
   CardContent,
@@ -26,14 +30,19 @@ export function ParticipantView({
   token: string;
   participant: ParticipantPage;
 }) {
-  const [wishlist, setWishlist] = useState(participant.self.wishlistText);
+  const { wishlistText: wishlist, wishlistRevision, photoIds } = participant.self;
   const [suggestion, setSuggestion] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoError, setPhotoError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const photoTarget = useRef<number | undefined>(undefined);
   const restoreFocus = useRef(false);
   const { pending, feedback, run, clearFeedback } = useOperation();
   const items = wishlistItems(wishlist);
   const nextWishlist = [...items, suggestion.trim()].join("\n");
   const listFull = nextWishlist.length > WISHLIST_MAX_LENGTH;
+  const photosFull = Object.keys(photoIds).length >= WISHLIST_MAX_PHOTOS;
 
   useEffect(() => {
     if (!pending && restoreFocus.current) {
@@ -42,15 +51,31 @@ export function ParticipantView({
     }
   }, [pending]);
 
-  function saveItems(nextItems: string[], added = false) {
+  function saveItems(text: string, options: { added?: boolean; removedIndex?: number; photoIndex?: number; file?: File } = {}) {
     if (pending) return;
-    const text = nextItems.join("\n");
-    run(() => saveWishlistAction({ token, wishlistText: text, expectedWishlistText: wishlist }), () => {
-      setWishlist(text);
-      if (added) setSuggestion("");
+    let upload: FormData | undefined;
+    if (options.file) {
+      upload = new FormData();
+      upload.set("photo", options.file);
+    }
+    setPhotoError("");
+    run(() => saveWishlistAction({
+      token, wishlistText: text, expectedWishlistText: wishlist, expectedRevision: wishlistRevision,
+      removedIndex: options.removedIndex, photoIndex: options.photoIndex,
+    }, upload), () => {
+      if (options.added) {
+        setSuggestion("");
+        setPhoto(null);
+      }
       restoreFocus.current = true;
     });
   }
+
+  function choosePhoto(index?: number) {
+    photoTarget.current = index;
+    photoInputRef.current?.click();
+  }
+
   return (
     <div className="space-y-7">
       <section
@@ -64,7 +89,7 @@ export function ParticipantView({
             : "A surpresa está sendo preparada"}
         </h2>
         {participant.recipient ? (
-          <RecipientReveal key={participant.recipient.name + participant.recipient.emoji} recipient={participant.recipient} />
+          <RecipientReveal key={participant.recipient.name + participant.recipient.emoji} token={token} recipient={participant.recipient} />
         ) : (
           <p className="mt-3 max-w-lg leading-relaxed text-white/85">
             Enquanto o organizador prepara o sorteio, você já pode deixar suas
@@ -86,7 +111,7 @@ export function ParticipantView({
             aria-busy={pending}
             onSubmit={(e) => {
               e.preventDefault();
-              if (suggestion.trim() && !listFull) saveItems([...items, suggestion.trim()], true);
+              if (suggestion.trim() && !listFull) saveItems(nextWishlist, { added: true, file: photo ?? undefined });
             }}
           >
             <div className="space-y-2">
@@ -104,7 +129,13 @@ export function ParticipantView({
                   onChange={(e) => { setSuggestion(e.target.value); clearFeedback(); }}
                   aria-describedby="wishlist-help wishlist-count"
                 />
-                <Button type="submit" className="h-11 shrink-0" disabled={pending || !suggestion.trim() || listFull}>
+                <Button type="button" variant="outline" className="h-11 px-3" disabled={pending || photosFull}
+                  aria-label="Incluir foto na nova sugestão" aria-describedby="wishlist-photo-help"
+                  title="Incluir foto" onClick={() => choosePhoto()}>
+                  <ImagePlus aria-hidden="true" />
+                  <span className="hidden sm:inline">Foto</span>
+                </Button>
+                <Button type="submit" className="h-11 shrink-0" disabled={pending || !suggestion.trim() || listFull || (photosFull && !!photo)}>
                   Adicionar
                 </Button>
               </div>
@@ -117,13 +148,54 @@ export function ParticipantView({
                 {suggestion.length}/{WISHLIST_ITEM_MAX_LENGTH}
               </span>
             </div>
+            <input type="file" ref={photoInputRef} hidden disabled={pending}
+              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (!file) return;
+                const index = photoTarget.current;
+                clearFeedback();
+                if (file.size > WISHLIST_PHOTO_MAX_BYTES) {
+                  setPhotoError(WISHLIST_PHOTO_TOO_LARGE);
+                  return;
+                }
+                setPhotoError("");
+                if (index === undefined) setPhoto(file);
+                else saveItems(wishlist, { photoIndex: index, file });
+              }}
+            />
+            <p id="wishlist-photo-help" className="text-xs text-muted-foreground">
+              {photosFull
+                ? `Sua lista atingiu o limite de ${WISHLIST_MAX_PHOTOS} fotos.`
+                : "Foto opcional em JPG, PNG ou WebP, até 3 MB."}
+            </p>
+            {photo ? (
+              <div className="flex items-center gap-2 rounded-lg border border-border px-3">
+                <p className="min-w-0 flex-1 truncate text-sm" title={photo.name}>{photo.name}</p>
+                <Button type="button" variant="ghost" className="h-11" disabled={pending}
+                  onClick={() => { setPhoto(null); setPhotoError(""); clearFeedback(); }}>
+                  Remover foto
+                </Button>
+              </div>
+            ) : null}
+            {photoError ? <p role="alert" className="text-sm text-destructive">{photoError}</p> : null}
             {listFull ? <p role="alert" className="text-sm text-destructive">Sua lista atingiu o limite de 5.000 caracteres. Remova uma sugestão para adicionar outra.</p> : null}
             {items.length ? (
               <ul aria-label="Suas sugestões salvas" className="divide-y divide-border">
                 {items.map((item, index) => (
                   <li key={index} className="flex items-start gap-3 py-3">
                     <p className="min-w-0 flex-1 break-words pt-2 text-sm leading-relaxed [overflow-wrap:anywhere]">{item}</p>
-                    <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0 text-muted-foreground" disabled={pending} aria-label={`Remover sugestão: ${item}`} onClick={() => saveItems(items.filter((_, itemIndex) => itemIndex !== index))}>
+                    {photoIds[index] ? (
+                      <WishlistPhotoLink token={token} photoId={photoIds[index]} suggestion={item} className="h-11" />
+                    ) : (
+                      <Button type="button" variant="ghost" size="icon" className="size-11 text-muted-foreground"
+                        disabled={pending || photosFull} aria-label={`Incluir foto em ${item}`} title="Incluir foto"
+                        onClick={() => choosePhoto(index)}>
+                        <ImagePlus aria-hidden="true" />
+                      </Button>
+                    )}
+                    <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0 text-muted-foreground" disabled={pending} aria-label={`Remover sugestão: ${item}`} onClick={() => saveItems(items.filter((_, itemIndex) => itemIndex !== index).join("\n"), { removedIndex: index })}>
                       <X aria-hidden="true" className="size-4" />
                     </Button>
                   </li>

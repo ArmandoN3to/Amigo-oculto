@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireAdmin, signIn, signOut } from "@/lib/auth";
@@ -8,7 +9,8 @@ import { dispatchEmails, emailConfigured, type EmailSummary } from "@/lib/email"
 import { AppError } from "@/lib/errors";
 import { consumeRateLimit } from "@/lib/rate-limit";
 import { resolveParticipant } from "@/lib/tokens";
-import { hasOnlyShortNewSuggestions } from "@/lib/wishlist";
+import { hasOnlyShortNewSuggestions, wishlistItems, WISHLIST_MAX_PHOTOS } from "@/lib/wishlist";
+import { readWishlistPhoto } from "@/lib/wishlist-photo-upload";
 import type { ActionResult } from "@/lib/types";
 import { participantEmojiSchema, deleteParticipantSchema, drawSchema, eventIdSchema, eventSchema, exclusionSchema, loginSchema, participantSchema, wishlistSchema } from "@/lib/validations";
 import { confirmDraw, deleteParticipant, prepareInvitations, regenerateLink, saveEvent, saveExclusion, saveParticipant } from "./service";
@@ -79,17 +81,52 @@ export async function regenerateParticipantLinkAction(input: { eventId: string; 
   try { await requireAdmin(); const data = deleteParticipantSchema.parse(input); await regenerateLink(data.eventId, data.participantId); const summary = await dispatchEmails(data.eventId); refreshAdmin(); revalidatePath("/participante/[token]", "page"); return { ok: true, message: `O link anterior foi invalidado. ${deliveryMessage(summary)}` }; }
   catch (error) { return failure(error); }
 }
-export async function saveWishlistAction(input: z.infer<typeof wishlistSchema>): Promise<ActionResult> {
+export async function saveWishlistAction(input: z.infer<typeof wishlistSchema>, upload?: FormData): Promise<ActionResult> {
   try {
     const data = wishlistSchema.parse(input);
     const participant = await resolveParticipant(data.token);
     if (!participant) throw new AppError("Este link é inválido ou foi substituído. Peça um novo link ao organizador.");
     const conflictMessage = "Suas sugestões foram alteradas em outra página. Atualize esta página antes de tentar novamente.";
     if (data.expectedWishlistText !== undefined && data.expectedWishlistText !== participant.wishlist_text) throw new AppError(conflictMessage);
+    if (data.expectedRevision !== undefined && data.expectedRevision !== participant.wishlist_revision) throw new AppError(conflictMessage);
     if (!hasOnlyShortNewSuggestions(data.wishlistText, participant.wishlist_text)) throw new AppError("Cada nova sugestão precisa ter até 120 caracteres.");
+
+    const items = wishlistItems(participant.wishlist_text);
+    const file = upload?.get("photo") ?? null;
+    const photos = participant.wishlist_photo_ids;
+    const photoCount = Object.keys(photos).length;
+    const { removedIndex, photoIndex } = data;
+    const nextItems = wishlistItems(data.wishlistText);
+    const appending = nextItems.length === items.length + 1 && items.every((item, index) => item === nextItems[index]);
+    if (removedIndex !== undefined) {
+      if (file !== null || photoIndex !== undefined || removedIndex >= items.length
+        || data.wishlistText !== items.filter((_, index) => index !== removedIndex).join("\n")) throw new AppError(conflictMessage);
+    } else if (photoIndex !== undefined) {
+      if (file === null || !items[photoIndex] || photos[photoIndex]
+        || data.wishlistText !== participant.wishlist_text) throw new AppError(conflictMessage);
+    } else if ((file !== null && !appending)
+      || (photoCount && !appending && data.wishlistText !== participant.wishlist_text)) {
+      throw new AppError(conflictMessage);
+    }
+    if (file !== null && photoCount >= WISHLIST_MAX_PHOTOS) {
+      throw new AppError(`Você pode guardar até ${WISHLIST_MAX_PHOTOS} fotos na sua lista.`);
+    }
     await consumeRateLimit(`wishlist:${participant.id}`, 60, 1);
-    const changed = await (await getDb()).query("UPDATE participants SET wishlist_text=$2 WHERE id=$1 AND access_token_hash=$3 AND wishlist_text=$4 RETURNING id", [participant.id, data.wishlistText, participant.access_token_hash, participant.wishlist_text]);
-    if (!changed.rows.length) throw new AppError("Não foi possível salvar: o link ou as sugestões mudaram. Atualize esta página antes de tentar novamente.");
+    const photo = file === null ? null : await readWishlistPhoto(file);
+    await (await getDb()).transaction(async client => {
+      const changed = await client.query(`UPDATE participants SET wishlist_text=$2,wishlist_revision=wishlist_revision+1
+        WHERE id=$1 AND access_token_hash=$3 AND wishlist_revision=$4 AND wishlist_text=$5 RETURNING id`,
+      [participant.id, data.wishlistText, participant.access_token_hash, participant.wishlist_revision, participant.wishlist_text]);
+      if (!changed.rows.length) throw new AppError(conflictMessage);
+      if (removedIndex !== undefined && photoCount) {
+        await client.query("DELETE FROM wishlist_photos WHERE participant_id=$1 AND position=$2", [participant.id, removedIndex]);
+        await client.query("UPDATE wishlist_photos SET position=position-1 WHERE participant_id=$1 AND position>$2", [participant.id, removedIndex]);
+      }
+      if (photo) {
+        await client.query("INSERT INTO wishlist_photos(id,participant_id,position,content) VALUES ($1,$2,$3,$4)",
+          [randomUUID(), participant.id, photoIndex ?? items.length, photo]);
+      }
+    });
     revalidatePath("/participante/[token]", "page");
     return { ok: true, message: "Sua lista de presentes foi salva." };
   } catch (error) { return failure(error); }

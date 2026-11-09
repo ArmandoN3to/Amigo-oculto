@@ -3,9 +3,10 @@ import { redirect } from "next/navigation";
 import { adminConfigured, getAdminSession } from "@/lib/auth";
 import { getDb, storageMode, type SqlClient } from "@/lib/db";
 import { getEmailConfiguration } from "@/lib/email-config";
-import { resolveParticipant } from "@/lib/tokens";
+import { resolveParticipant, wishlistPhotoIdsColumn } from "@/lib/tokens";
 import type { AdminDashboard, AdminEvent, AdminParticipant, ParticipantPage, PublicEvent, RuntimeStatus } from "@/lib/types";
 import { idSchema } from "@/lib/validations";
+import type { WishlistPhotoIds } from "@/lib/wishlist";
 
 type PublicEventRow = { id: string; name: string; event_date: Date | string; gift_limit: string | number | null; status: "draft" | "drawn"; participant_count: string; draw_version: number };
 function eventDTO(row: PublicEventRow): PublicEvent {
@@ -63,11 +64,24 @@ export async function getParticipantPage(token: string): Promise<ParticipantPage
     if (!event) return null;
     let recipient: ParticipantPage["recipient"] = null;
     if (event.status === "drawn") {
-      const result = await client.query<{ name: string; emoji: string; wishlist_text: string }>(`SELECT p.name,p.emoji,p.wishlist_text
+      const result = await client.query<{ name: string; emoji: string; wishlist_text: string; wishlist_photo_ids: WishlistPhotoIds }>(`SELECT p.name,p.emoji,p.wishlist_text,${wishlistPhotoIdsColumn}
         FROM draws d JOIN participants p ON p.id=d.receiver_id
         WHERE d.event_id=$1 AND d.giver_id=$2 AND d.draw_version=$3`, [event.id, participant.id, event.draw_version]);
-      if (result.rows[0]) recipient = { name: result.rows[0].name, emoji: result.rows[0].emoji, wishlistText: result.rows[0].wishlist_text };
+      const person = result.rows[0];
+      if (person) {
+        recipient = { name: person.name, emoji: person.emoji, wishlistText: person.wishlist_text };
+        if (Object.keys(person.wishlist_photo_ids).length) recipient.photoIds = person.wishlist_photo_ids;
+      }
     }
-    return { event: eventDTO(event), self: { name: participant.name, wishlistText: participant.wishlist_text }, recipient };
+    return {
+      event: eventDTO(event),
+      self: {
+        name: participant.name,
+        wishlistText: participant.wishlist_text,
+        wishlistRevision: participant.wishlist_revision,
+        photoIds: participant.wishlist_photo_ids,
+      },
+      recipient,
+    };
   });
 }

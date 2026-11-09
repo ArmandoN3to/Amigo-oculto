@@ -34,6 +34,8 @@ Cada participante acessa somente seu link, edita suas sugestões e consulta o no
 
 As sugestões são adicionadas uma por vez, em um campo de até 120 caracteres com o botão **Adicionar** ao lado. Adicionar e remover salva a lista automaticamente; o limite total é de 5.000 caracteres. Sugestões antigas mais longas continuam disponíveis até serem removidas.
 
+O botão de foto ao lado do campo ou de uma sugestão salva permite incluir uma imagem opcional. São aceitos JPG, PNG e WebP de até 3 MB, com uma foto por sugestão e até 10 por participante. **Ver foto** abre a imagem em outra aba. Apenas quem enviou a foto e quem tirou essa pessoa no sorteio atual podem abrir a imagem com seus links individuais.
+
 Após o sorteio, o cadastro e as exclusões ficam bloqueados. Refazer o sorteio exige confirmação explícita e substitui os resultados anteriores. Uma combinação impossível de exclusões gera erro e preserva o sorteio salvo.
 
 Para o ano seguinte, crie outro evento e copie os familiares do evento anterior. A cópia leva nomes, e-mails e emojis. Resultados, links, sugestões, exclusões e envios pertencem a cada evento.

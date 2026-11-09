@@ -1,5 +1,10 @@
 export const WISHLIST_ITEM_MAX_LENGTH = 120;
 export const WISHLIST_MAX_LENGTH = 5000;
+export const WISHLIST_PHOTO_MAX_BYTES = 3 * 1024 * 1024;
+export const WISHLIST_MAX_PHOTOS = 10;
+export const WISHLIST_PHOTO_TOO_LARGE = "Escolha uma foto de até 3 MB.";
+
+export type WishlistPhotoIds = Record<number, string>;
 
 export function wishlistItems(text: string): string[] {
   return text.split(/\r?\n/).map(item => item.trim()).filter(Boolean);
